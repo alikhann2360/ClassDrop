@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClassDrop</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+:root{--bg:#0b0e15;--card:#1c2230;--field:#0e1119;--line:#2b3345;--tx:#f3f5fa;--mut:#9aa4b8;--ac:#6d5efc;--ac2:#8b7fff;--ok:#34d399;--bad:#f87171}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.5 Inter,system-ui,sans-serif}
+a{color:var(--ac2)}
+.wrap{max-width:1100px;margin:0 auto;padding:24px 16px}
+.narrow{max-width:560px}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;gap:12px;flex-wrap:wrap}
+.logo{font-weight:800;font-size:22px}.logo small{display:block;font-weight:400;font-size:13px;color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:24px}
+h1,h2{margin:0 0 4px}h2{font-size:22px}.sub{color:var(--mut);margin:0 0 20px}
+label{display:block;font-weight:700;margin:16px 0 8px}
+input,select{width:100%;background:var(--field);color:var(--tx);border:1px solid var(--line);border-radius:14px;padding:15px 16px;font:inherit}
+input:focus,select:focus{outline:2px solid var(--ac);border-color:transparent}
+.drop{margin-top:18px;border:2px dashed #3a4460;border-radius:18px;padding:34px 16px;text-align:center;cursor:pointer;transition:.2s}
+.drop:hover,.drop.on{border-color:var(--ac2);background:#232a3c}
+.drop b{display:block;margin-top:6px}.drop span{color:var(--mut);font-size:14px}
+.btn{background:var(--ac);color:#fff;border:0;border-radius:14px;padding:13px 20px;font:inherit;font-weight:700;cursor:pointer}
+.btn:hover{background:var(--ac2)}.btn:disabled{opacity:.5;cursor:wait}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--tx)}
+.btn.ghost:hover{background:#252c3e}.btn.sm{padding:7px 12px;font-size:14px;border-radius:10px}.btn.del{color:var(--bad)}
+.row{display:flex;gap:10px;margin-top:20px}.row .btn:first-child{flex:1}
+.bar{height:8px;background:var(--field);border-radius:8px;overflow:hidden;margin-top:14px;display:none}
+.bar i{display:block;height:100%;width:0;background:var(--ac);transition:width .15s}
+.msg{margin-top:14px;padding:12px 14px;border-radius:12px;display:none;font-size:15px}
+.msg.ok{display:block;background:#0f2a22;color:var(--ok)}.msg.err{display:block;background:#33181b;color:var(--bad)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+.stat p{margin:0;color:var(--mut);font-size:14px}.stat h3{margin:4px 0 0;font-size:24px}
+.tools{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}.tools input{flex:2;min-width:180px}.tools select{flex:1;min-width:140px}
+.tools input,.tools select{padding:11px 14px}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:16px}
+table{border-collapse:collapse;width:100%;min-width:860px}
+th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);font-size:14px}
+th{color:var(--mut);font-weight:600;background:#171c28;cursor:default}tr:last-child td{border:0}
+.empty{text-align:center;padding:44px;color:var(--mut)}
+.acts{display:flex;gap:6px}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#252c3e;border:1px solid var(--line);padding:12px 18px;border-radius:12px;display:none;z-index:9}
+.modal{position:fixed;inset:0;background:#000a;display:none;place-items:center;z-index:8;padding:16px}.modal.on{display:grid}
+.modal .card{max-width:400px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<div class="modal" id="modal"><div class="card"><h2>Delete submission?</h2><p class="sub" id="mtxt"></p><div class="row"><button class="btn ghost" id="mno">Cancel</button><button class="btn" style="background:var(--bad)" id="myes">Delete</button></div></div></div>
+<div class="toast" id="toast"></div>
+<script>
+/* ===== CONFIG: fill these in ===== */
+const SUPABASE_URL_RAW = "https://gtvkwcjpoymjswydnrod.supabase.co/rest/v1/";
+const SUPABASE_ANON_KEY = "sb_publishable_K0iBw_vfYhHW-JM9ZKxHQw_Gy_jM4Y6".trim();
+const CLASS_NAME = "BSE Class, Spring 2026";
+const DEADLINE = ""; // optional, e.g. "2026-12-31T23:59"
+/* ================================= */
+const SUPABASE_URL = SUPABASE_URL_RAW.trim().replace(/^(https?:\/\/[^\/]+).*$/, "$1");
+const MAX = 20 * 1024 * 1024, BUCKET = "assignments";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = s => document.querySelector(s), app = $("#app");
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const safe = s => String(s).replace(/[^\w.\-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80) || "file";
+const fmt = d => new Date(d).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+function toast(t) { const e = $("#toast"); e.textContent = t; e.style.display = "block"; setTimeout(() => e.style.display = "none", 3200) }
+function splitSA(v) { const p = v.split(/\s*[—–-]\s*/); return { subject: p[0].trim(), assignment: (p.slice(1).join(" - ") || "General").trim() } }
+
+/* ---------- Router ---------- */
+addEventListener("hashchange", route); route();
+function route() { location.hash.startsWith("#/admin") ? admin() : student() }
+
+/* ---------- Student page ---------- */
+function student() {
+  app.className = "wrap narrow";
+  app.innerHTML = `<header><div class="logo">ClassDrop<small>${esc(CLASS_NAME)}</small></div><a href="#/admin">CR login</a></header>
+  <div class="card"><h2>Submit your assignment</h2><p class="sub">Fill in your details and attach your PDF.</p>
+  <form id="f" novalidate>
+  <label for="n">Full name</label><input id="n" placeholder="e.g. Ali Khan" autocomplete="name" maxlength="80">
+  <label for="r">Roll number</label><input id="r" placeholder="e.g. SP26-BSE-053" maxlength="30">
+  <label for="s">Subject / assignment</label><input id="s" placeholder="e.g. Pre Calculus 2 — Assignment 1" maxlength="120">
+  <div class="drop" id="dz" tabindex="0"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M6 10l6-6 6 6M4 20h16"/></svg><b id="fn">Choose PDF file</b><span id="fh">PDF only · Maximum 20 MB</span></div>
+  <input type="file" id="file" accept="application/pdf,.pdf" hidden>
+  <div class="bar" id="bar"><i id="bi"></i></div><div class="msg" id="msg"></div>
+  <div class="row"><button class="btn" id="go">Submit assignment</button><button type="button" class="btn ghost" id="rs">Reset</button></div></form></div>
+  ${DEADLINE ? `<p class="sub" style="margin-top:14px">Deadline: ${fmt(DEADLINE)}</p>` : ""}`;
+  const dz = $("#dz"), fi = $("#file"), msg = $("#msg");
+  const say = (t, k) => { msg.className = "msg " + k; msg.textContent = t };
+  const pick = f => { if (!f) return; fi.__f = f; $("#fn").textContent = f.name; $("#fh").textContent = (f.size / 1048576).toFixed(2) + " MB" };
+  dz.onclick = () => fi.click(); dz.onkeydown = e => (e.key === "Enter" || e.key === " ") && fi.click();
+  fi.onchange = () => pick(fi.files[0]);
+  dz.ondragover = e => { e.preventDefault(); dz.classList.add("on") }; dz.ondragleave = () => dz.classList.remove("on");
+  dz.ondrop = e => { e.preventDefault(); dz.classList.remove("on"); pick(e.dataTransfer.files[0]) };
+  const reset = () => { $("#f").reset(); fi.__f = null; $("#fn").textContent = "Choose PDF file"; $("#fh").textContent = "PDF only · Maximum 20 MB"; msg.className = "msg"; $("#bar").style.display = "none" };
+  $("#rs").onclick = reset;
+  $("#f").onsubmit = async e => {
+    e.preventDefault();
+    const name = $("#n").value.trim(), roll = $("#r").value.trim(), sa = $("#s").value.trim(), f = fi.__f;
+    if (!name || !roll || !sa) return say("Fill in your name, roll number and subject / assignment.", "err");
+    if (!f) return say("Choose a PDF file to upload.", "err");
+    if (f.type !== "application/pdf" && !/\.pdf$/i.test(f.name)) return say("Only PDF files are accepted.", "err");
+    if (f.size > MAX) return say("File is larger than 20 MB. Compress it and try again.", "err");
+    if (f.size === 0) return say("This file is empty.", "err");
+    if (DEADLINE && new Date() > new Date(DEADLINE)) return say("The deadline has passed.", "err");
+    const { subject, assignment } = splitSA(sa), path = `${crypto.randomUUID()}_${safe(f.name)}`;
+    $("#go").disabled = true; $("#bar").style.display = "block"; $("#bi").style.width = "0"; msg.className = "msg";
+    try {
+      await new Promise((ok, no) => {
+        const x = new XMLHttpRequest();
+        x.open("POST", `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`);
+        x.setRequestHeader("apikey", SUPABASE_ANON_KEY);
+        if (SUPABASE_ANON_KEY.startsWith("eyJ")) x.setRequestHeader("Authorization", "Bearer " + SUPABASE_ANON_KEY); // new sb_publishable_ keys are not JWTs
+        x.setRequestHeader("Content-Type", "application/pdf");
+        x.upload.onprogress = ev => ev.lengthComputable && ($("#bi").style.width = (ev.loaded / ev.total * 95) + "%");
+        x.onload = () => { if (x.status < 300) return ok(); let d = ""; try { d = JSON.parse(x.responseText).message } catch { } no(new Error(`Upload rejected (${x.status}): ${d || "unknown reason"}`)) };
+        x.onerror = () => no(new Error("Network error. Check your connection."));
+        x.send(f);
+      });
+      const { error } = await sb.from("assignments").insert({ student_name: name, roll_number: roll, subject, assignment_name: assignment, file_name: f.name, storage_path: path, file_size: f.size });
+      if (error) { console.error(error);
+        throw new Error(error.code === "23505" ? "You already submitted this assignment." : "Could not save your submission. Try again."); }
+      $("#bi").style.width = "100%"; reset(); say("Submitted. Your CR can now see your assignment.", "ok");
+    } catch (err) { say(err.message, "err"); $("#bar").style.display = "none" }
+    $("#go").disabled = false;
+  };
+}
+
+/* ---------- Admin ---------- */
+let rows = [], chan;
+async function admin() {
+  app.className = "wrap";
+  const { data: { session } } = await sb.auth.getSession();
+  session ? dash() : login();
+}
+function login() {
+  app.className = "wrap narrow";
+  app.innerHTML = `<header><div class="logo">ClassDrop<small>CR access</small></div><a href="#/">Student page</a></header>
+  <div class="card"><h2>CR login</h2><p class="sub">Only the class representative can view submissions.</p>
+  <form id="lf"><label for="e">Email</label><input id="e" type="email" autocomplete="username" required>
+  <label for="p">Password</label><input id="p" type="password" autocomplete="current-password" required>
+  <div class="msg" id="lm"></div><div class="row"><button class="btn">Log in</button></div></form></div>`;
+  $("#lf").onsubmit = async e => {
+    e.preventDefault();
+    const { error } = await sb.auth.signInWithPassword({ email: $("#e").value.trim(), password: $("#p").value });
+    if (error) { const m = $("#lm"); m.className = "msg err"; m.textContent = "Wrong email or password." } else dash();
+  };
+}
+async function dash() {
+  app.className = "wrap";
+  app.innerHTML = `<header><div class="logo">ClassDrop<small>${esc(CLASS_NAME)} · Dashboard</small></div>
+  <div class="acts"><a class="btn ghost sm" href="#/">Student page</a><button class="btn ghost sm" id="lo">Log out</button></div></header>
+  <div class="stats"><div class="stat"><p>Assignments submitted</p><h3 id="s1">–</h3></div><div class="stat"><p>Unique students</p><h3 id="s2">–</h3></div><div class="stat"><p>Latest submission</p><h3 id="s3" style="font-size:17px;margin-top:10px">–</h3></div></div>
+  <div class="tools"><input id="q" placeholder="Search name or roll number"><select id="fs"></select><select id="fa"></select><select id="so"><option value="d">Newest first</option><option value="a">Oldest first</option></select></div>
+  <div class="tools"><button class="btn sm" id="zip">Download all (.ZIP)</button><button class="btn ghost sm" id="csv">Export CSV</button><button class="btn ghost sm" id="rf">Refresh</button></div>
+  <div class="bar" id="bar"><i id="bi"></i></div><div class="msg" id="msg"></div>
+  <div class="tw"><table><thead><tr><th>Student</th><th>Roll no.</th><th>Subject</th><th>Assignment</th><th>File</th><th>Submitted</th><th>Actions</th></tr></thead><tbody id="tb"></tbody></table></div>`;
+  $("#lo").onclick = async () => { await sb.auth.signOut(); chan && sb.removeChannel(chan); login() };
+  $("#rf").onclick = load; $("#zip").onclick = zipAll; $("#csv").onclick = csv;
+  ["q", "fs", "fa", "so"].forEach(i => $("#" + i).oninput = render);
+  await load();
+  chan = sb.channel("a").on("postgres_changes", { event: "*", schema: "public", table: "assignments" }, load).subscribe();
+}
+async function load() {
+  const { data, error } = await sb.from("assignments").select("*").order("created_at", { ascending: false });
+  if (error) { const m = $("#msg"); m.className = "msg err"; m.textContent = "Access denied or failed to load. Make sure you are logged in as the CR."; return }
+  rows = data; const opt = (id, all, k) => { const el = $("#" + id), cur = el.value; el.innerHTML = `<option value="">${all}</option>` + [...new Set(rows.map(r => r[k]))].sort().map(v => `<option>${esc(v)}</option>`).join(""); el.value = cur };
+  opt("fs", "All subjects", "subject"); opt("fa", "All assignments", "assignment_name"); render();
+}
+function view() {
+  const q = $("#q").value.toLowerCase(), s = $("#fs").value, a = $("#fa").value;
+  let r = rows.filter(x => (!q || x.student_name.toLowerCase().includes(q) || x.roll_number.toLowerCase().includes(q)) && (!s || x.subject === s) && (!a || x.assignment_name === a));
+  r.sort((x, y) => $("#so").value === "a" ? new Date(x.created_at) - new Date(y.created_at) : new Date(y.created_at) - new Date(x.created_at));
+  return r;
+}
+function render() {
+  $("#s1").textContent = rows.length; $("#s2").textContent = new Set(rows.map(r => r.roll_number.toLowerCase())).size;
+  $("#s3").textContent = rows.length ? fmt(rows[0].created_at) : "None yet";
+  const r = view();
+  $("#tb").innerHTML = r.length ? r.map(x => `<tr><td>${esc(x.student_name)}</td><td>${esc(x.roll_number)}</td><td>${esc(x.subject)}</td><td>${esc(x.assignment_name)}</td><td>${esc(x.file_name)}<br><span style="color:var(--mut)">${(x.file_size / 1048576).toFixed(2)} MB</span></td><td>${fmt(x.created_at)}</td>
+  <td><div class="acts"><button class="btn ghost sm" data-v="${x.id}">View</button><button class="btn ghost sm" data-d="${x.id}">Download</button><button class="btn ghost sm del" data-x="${x.id}">Delete</button></div></td></tr>`).join("")
+    : `<tr><td colspan="7" class="empty">${rows.length ? "No submissions match your filters." : "No assignments yet. Share the student page link to start collecting."}</td></tr>`;
+}
+$("#app").addEventListener("click", async e => {
+  const b = e.target.closest("button"); if (!b) return; const id = b.dataset.v || b.dataset.d || b.dataset.x, x = rows.find(r => r.id === id); if (!x) return;
+  if (b.dataset.v || b.dataset.d) {
+    const { data, error } = await sb.storage.from(BUCKET).createSignedUrl(x.storage_path, 60, b.dataset.d ? { download: `${safe(x.roll_number)}_${safe(x.student_name)}.pdf` } : undefined);
+    if (error) return toast("Could not open file."); window.open(data.signedUrl, "_blank");
+  } else {
+    $("#mtxt").textContent = `${x.student_name} (${x.roll_number}) · ${x.subject} — ${x.assignment_name}. This cannot be undone.`; $("#modal").classList.add("on");
+    $("#mno").onclick = () => $("#modal").classList.remove("on");
+    $("#myes").onclick = async () => {
+      $("#modal").classList.remove("on");
+      const { error } = await sb.from("assignments").delete().eq("id", x.id);
+      if (error) return toast("Delete failed.");
+      await sb.storage.from(BUCKET).remove([x.storage_path]); toast("Deleted."); load();
+    };
+  }
+});
+async function zipAll() {
+  const list = view(), m = $("#msg"), bar = $("#bar"), bi = $("#bi"); if (!list.length) return toast("Nothing to download.");
+  const z = new JSZip(), fails = []; bar.style.display = "block"; bi.style.width = "0"; m.className = "msg"; $("#zip").disabled = true;
+  for (let i = 0; i < list.length; i++) {
+    const x = list[i];
+    try {
+      const { data, error } = await sb.storage.from(BUCKET).download(x.storage_path); if (error) throw error;
+      let name = `${safe(x.roll_number)}_${safe(x.student_name)}.pdf`; const dir = `${safe(x.subject)}/${safe(x.assignment_name)}/`;
+      if (z.file(dir + name)) name = name.replace(".pdf", `_${i}.pdf`);
+      z.file(dir + name, data);
+    } catch { fails.push(`${x.roll_number} (${x.file_name})`) }
+    bi.style.width = ((i + 1) / list.length * 80) + "%";
+  }
+  const blob = await z.generateAsync({ type: "blob", compression: "STORE" }, p => bi.style.width = (80 + p.percent * .2) + "%");
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "Class_Assignments.zip"; a.click();
+  m.className = "msg " + (fails.length ? "err" : "ok"); m.textContent = fails.length ? `ZIP saved, but ${fails.length} file(s) failed: ${fails.join(", ")}` : `ZIP saved with ${list.length} assignment(s).`;
+  $("#zip").disabled = false; setTimeout(() => bar.style.display = "none", 800);
+}
+function csv() {
+  const r = view(), q = v => `"${String(v).replace(/"/g, '""')}"`;
+  const t = ["Name,Roll,Subject,Assignment,File,Size,Submitted", ...r.map(x => [x.student_name, x.roll_number, x.subject, x.assignment_name, x.file_name, x.file_size, x.created_at].map(q).join(","))].join("\n");
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([t], { type: "text/csv" })); a.download = "submissions.csv"; a.click();
+}
+</script>
+</body>
+</html>
